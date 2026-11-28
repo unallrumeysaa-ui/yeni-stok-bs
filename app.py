@@ -165,43 +165,43 @@ st.markdown(
 # YAN MENÜ: MODEL SEÇİMİ VE PARAMETRELER
 # ==========================================
 with st.sidebar:
-    st.markdown("### 1. Model Belirleme")
+    st.markdown("### 1. Adım: Stok ve Yoksatma Politikası")
 
     sonradan_karsilama = st.radio(
-        "Stoklar tükendiğinde talebin sonradan karşılanmasına (yoksatmaya) izin veriliyor mu?",
+        "Stok tükenmesi durumunda işletme politikası nedir?",
         (
-            "Hayır, sonradan karşılama yok (Model 4 - Klasik EOQ)",
-            "Evet, sonradan karşılama var (Model 3 - Perakendeci Modeli)",
+            "Sonradan karşılama yapılmaz (Model 4 - Klasik EOQ)",
+            "Sonradan karşılama (yoksatma) yapılır (Model 3 - Perakendeci Modeli)",
         ),
     )
 
     pi_var_mi = False
     if "Model 3" in sonradan_karsilama:
         pi_durumu = st.radio(
-            "Zamana bağlı sonradan karşılama maliyetine (π̂) ek olarak, zamandan bağımsız (birim başına sabit) ceza maliyeti (π) var mı?",
+            "Sonradan karşılama (yoksatma) maliyet yapısı nasıl işliyor?",
             (
-                "Hayır, zamandan bağımsız maliyet YOK (Sadece π̂ var)",
-                "Evet, zamandan bağımsız maliyet VAR (Hem π̂ hem π var)",
+                "Yalnızca zamana bağlı maliyet uygulanır (π̂)",
+                "Zamana bağlı (π̂) ve zamandan bağımsız (π) maliyet birlikte uygulanır",
             ),
         )
-        if "VAR" in pi_durumu:
+        if "birlikte" in pi_durumu:
             pi_var_mi = True
 
     st.divider()
-    st.markdown("### 2. Problem Parametreleri")
+    st.markdown("### 2. Adım: İşletme ve Maliyet Parametreleri")
 
     D = st.number_input("Yıllık Talep (D) [adet/yıl]", min_value=0.01, value=1000.0, step=50.0)
     A = st.number_input("Sipariş Verme Maliyeti (A) [TL/sipariş]", min_value=0.01, value=100.0, step=10.0)
 
     h_durumu = st.radio(
-        "Stokta bulundurma maliyeti (h) doğrudan verilmiş mi?",
+        "Depolama maliyeti (h) hangi esasa göre belirlensin?",
         (
-            "Evet, h değeri doğrudan verilmiş",
-            "Hayır, h verilmemiş (i ve C değerleri ile h = i × C hesaplanacak)",
+            "Birim depolama maliyeti doğrudan girilecek (h)",
+            "Elde tutma oranı ile hesaplanacak (h = i × C)",
         ),
     )
 
-    if "Evet" in h_durumu:
+    if "doğrudan" in h_durumu:
         h = st.number_input("Stokta Bulundurma Maliyeti (h) [TL/adet-yıl]", min_value=0.01, value=5.0, step=0.5)
         C = st.number_input(
             "Birim Satın Alma Maliyeti (C) [TL/adet] (Opsiyonel)",
@@ -236,7 +236,7 @@ with st.sidebar:
             pi_sabit = 0.0
 
     st.divider()
-    if st.button("Optimum Sonuçları Hesapla", type="primary", use_container_width=True):
+    if st.button("Stok Planını Oluştur", type="primary", use_container_width=True):
         st.session_state["hesaplandi"] = True
 
 
@@ -358,7 +358,7 @@ with sekme_sonuc:
             <div class="bos-durum">
                 <b>Henüz hesaplama yapılmadı.</b><br>
                 Sol menüden modeli seçip parametreleri girin, ardından
-                <b>Optimum Sonuçları Hesapla</b> düğmesine basın.
+                <b>Stok Planını Oluştur</b> düğmesine basın.
             </div>
             """,
             unsafe_allow_html=True,
@@ -488,6 +488,10 @@ with sekme_sonuc:
             st.dataframe(maliyet_tablosu(kalemler, "TOPLAM MALİYET K(Q,b)", K_Qb), hide_index=True, use_container_width=True)
         with sag:
             st.pyplot(maliyet_dagilimi_ciz(kalemler))
+
+        bolum("Stok Seviyesi Grafiği")
+        st.pyplot(stok_grafigi_ciz(Q_opt, b_opt, T, t1, t2, model_baslik))
+
 
         bolum("Stok Seviyesi Grafiği")
         st.pyplot(stok_grafigi_ciz(Q_opt, b_opt, T, t1, t2, model_baslik))
