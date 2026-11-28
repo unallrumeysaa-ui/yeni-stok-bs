@@ -1,3 +1,4 @@
+import inspect
 import math
 
 import matplotlib.pyplot as plt
@@ -20,6 +21,56 @@ MAVI = "#1F4E79"
 ACIK_MAVI = "#8DA9C4"
 KIRMIZI = "#B23A48"
 GRI = "#5B6776"
+
+# Ek operasyonel maliyet seçenekleri
+SECENEK_SIP = "Sipariş maliyetine ek maliyet (D/Q üzerinden hesaplanır)"
+SECENEK_DEPO = "Depolama maliyetine ek maliyet (stok seviyesi üzerinden hesaplanır)"
+BAZ_ORT = "Ortalama stok üzerinden (Ī)"
+BAZ_MAKS = "Maksimum stok üzerinden (I_max)"
+
+
+def genis(fonk):
+    """Streamlit sürümüne göre tam genişlik parametresini döndürür."""
+    try:
+        if "width" in inspect.signature(fonk).parameters:
+            return {"width": "stretch"}
+    except (TypeError, ValueError):
+        pass
+    return {"use_container_width": True}
+
+
+# ==========================================
+# OPTİMİZASYON FONKSİYONLARI
+# a : toplam sipariş maliyeti (A + A_ek), g : ek depolama maliyeti [TL/adet-yıl]
+# ==========================================
+def model4_coz(D, a, h, g, baz):
+    """Model 4 (Klasik EOQ). Ortalama stok tabanında h_etkin = h + g,
+    maksimum stok tabanında (I_max = Q) h_etkin = h + 2g."""
+    h_etkin = h + g if baz == BAZ_ORT else h + 2 * g
+    return math.sqrt((2 * D * a) / h_etkin)
+
+
+def model3_coz(D, a, h, g, baz, pi_hat, pi):
+    """Model 3 (Sonradan karşılamalı). (Q, b, hata_kodu) döndürür."""
+    if baz == BAZ_MAKS and g > 0:
+        # Ek depolama maliyeti maksimum stok (Q - b) üzerinden
+        pay = 2 * a * D * (h + pi_hat) - (pi * D) ** 2
+        payda = pi_hat * (h + 2 * g) - g ** 2
+        if pay <= 0 or payda <= 0:
+            return None, None, "ekonomik_degil"
+        Q = math.sqrt(pay / payda)
+        b = ((h + g) * Q - pi * D) / (h + pi_hat)
+        if b >= Q:
+            return None, None, "stok_yok"
+    else:
+        # Ek depolama maliyeti ortalama stok üzerinden: h yerine (h + g)
+        h_e = h + g
+        kok_ici = ((2 * a * D) / h_e) - (((pi * D) ** 2) / (h_e * (h_e + pi_hat)))
+        if kok_ici <= 0:
+            return None, None, "ekonomik_degil"
+        Q = math.sqrt(kok_ici) * math.sqrt((h_e + pi_hat) / pi_hat)
+        b = (h_e * Q - pi * D) / (h_e + pi_hat)
+    return Q, b, None
 
 # ==========================================
 # KURUMSAL TEMA (CSS)
@@ -236,7 +287,46 @@ with st.sidebar:
             pi_sabit = 0.0
 
     st.divider()
-    if st.button("Stok Planını Oluştur", type="primary", use_container_width=True):
+    st.markdown("### 3. Adım: Ek Operasyonel Maliyetler (Nakliye, Ek Depo vb.)")
+
+    ek_secimler = st.multiselect(
+        "Hangi maliyet kalemlerine ek operasyonel maliyet uygulanıyor?",
+        [SECENEK_SIP, SECENEK_DEPO],
+        default=[],
+        placeholder="Ek maliyet yoksa boş bırakınız",
+        help="Her iki kalem de aynı anda seçilebilir. Seçim yapılmazsa ek maliyet hesaba katılmaz.",
+    )
+    siparis_ek_var = SECENEK_SIP in ek_secimler
+    depo_ek_var = SECENEK_DEPO in ek_secimler
+
+    A_ek = 0.0
+    g_ek = 0.0
+    ek_baz = BAZ_ORT
+
+    if siparis_ek_var:
+        A_ek = st.number_input(
+            "Ek Sipariş Maliyeti (A_ek) [TL/sipariş]",
+            min_value=0.0,
+            value=50.0,
+            step=10.0,
+            help="Nakliye, gümrükleme gibi her siparişte oluşan ek maliyet. Yıllık tutar (D/Q)·A_ek olarak hesaplanır.",
+        )
+    if depo_ek_var:
+        g_ek = st.number_input(
+            "Ek Depolama Maliyeti (g) [TL/adet-yıl]",
+            min_value=0.0,
+            value=1.0,
+            step=0.5,
+            help="Ek depo kiralama, sigorta gibi stok miktarına bağlı ek maliyet.",
+        )
+        ek_baz = st.radio(
+            "Ek depolama maliyeti hangi stok seviyesi baz alınarak hesaplansın?",
+            (BAZ_ORT, BAZ_MAKS),
+            help="Ortalama stok: g·Ī  |  Maksimum stok: g·I_max (ek depo kapasitesi en yüksek stok düzeyine göre kiralanıyorsa).",
+        )
+
+    st.divider()
+    if st.button("Stok Planını Oluştur", type="primary", **genis(st.button)):
         st.session_state["hesaplandi"] = True
 
 
@@ -279,7 +369,7 @@ def maliyet_dagilimi_ciz(satirlar):
     adlar = [s[0] for s in satirlar]
     tutarlar = [s[1] for s in satirlar]
     fig, ax = plt.subplots(figsize=(6, 3.0 + 0.2 * len(satirlar)))
-    renkler = [MAVI, ACIK_MAVI, KIRMIZI, "#E0A458", "#6C8EAD"][: len(satirlar)]
+    renkler = [MAVI, ACIK_MAVI, KIRMIZI, "#E0A458", "#6C8EAD", "#4A7C59", "#7A5C99"][: len(satirlar)]
     cubuklar = ax.barh(adlar[::-1], tutarlar[::-1], color=renkler[::-1])
     ax.bar_label(cubuklar, labels=[f"{t:,.2f}" for t in tutarlar[::-1]], padding=4, color=LACIVERT, fontsize=9)
     ax.set_xlabel("TL / Yıl", color=GRI)
@@ -316,7 +406,59 @@ model_etiketi = (
     if "Model 4" in sonradan_karsilama
     else ("Model 3 · Perakendeci Modeli (π > 0)" if pi_var_mi else "Model 3 · Perakendeci Modeli (π = 0)")
 )
-st.markdown(f'<span class="rozet">Seçili model: {model_etiketi}</span>', unsafe_allow_html=True)
+ek_ozet = []
+if siparis_ek_var:
+    ek_ozet.append("Sipariş")
+if depo_ek_var:
+    ek_ozet.append("Depolama (" + ("ortalama stok" if ek_baz == BAZ_ORT else "maksimum stok") + ")")
+rozet_metni = f"Seçili model: {model_etiketi}"
+if ek_ozet:
+    rozet_metni += " · Ek maliyet: " + ", ".join(ek_ozet)
+st.markdown(f'<span class="rozet">{rozet_metni}</span>', unsafe_allow_html=True)
+
+
+def formuller_uret():
+    """Seçili modele ve ek maliyet tercihlerine göre LaTeX formüllerini üretir."""
+    A_s = r"(A + A_{ek})" if siparis_ek_var else "A"
+    maks = depo_ek_var and ek_baz == BAZ_MAKS
+
+    if "Model 4" in sonradan_karsilama:
+        baslik = "**Model 4 - Klasik EOQ (sonradan karşılama yok)**"
+        H = "h" if not depo_ek_var else ("(h+2g)" if maks else "(h+g)")
+        q = r"Q^* = \sqrt{\dfrac{2@A@D}{@H@}}".replace("@A@", A_s).replace("@H@", H)
+        k = r"K(Q) = \dfrac{D}{Q}@A@ + \dfrac{Q}{2}h".replace("@A@", A_s)
+        if depo_ek_var:
+            k += r" + Q\,g" if maks else r" + \dfrac{Q}{2}g"
+        k += " + DC"
+        return baslik, [q, k]
+
+    baslik = "**Model 3 - Perakendeci Modeli (π > 0)**" if pi_var_mi else "**Model 3 - Perakendeci Modeli (π = 0)**"
+    if not maks:
+        H = "(h+g)" if depo_ek_var else "h"
+        if pi_var_mi:
+            q = r"Q^* = \sqrt{\left(\dfrac{2@A@D}{@H@} - \dfrac{(\pi D)^2}{@H@(@H@+\hat{\pi})}\right)\dfrac{@H@+\hat{\pi}}{\hat{\pi}}}"
+            b = r"b^* = \dfrac{@H@Q^* - \pi D}{@H@+\hat{\pi}}"
+        else:
+            q = r"Q^* = \sqrt{\dfrac{2@A@D}{@H@}\cdot\dfrac{@H@+\hat{\pi}}{\hat{\pi}}}"
+            b = r"b^* = Q^*\,\dfrac{@H@}{@H@+\hat{\pi}}"
+    else:
+        if pi_var_mi:
+            q = r"Q^* = \sqrt{\dfrac{2@A@D(h+\hat{\pi}) - (\pi D)^2}{\hat{\pi}(h+2g) - g^2}}"
+            b = r"b^* = \dfrac{(h+g)Q^* - \pi D}{h+\hat{\pi}}"
+        else:
+            q = r"Q^* = \sqrt{\dfrac{2@A@D(h+\hat{\pi})}{\hat{\pi}(h+2g) - g^2}}"
+            b = r"b^* = \dfrac{(h+g)Q^*}{h+\hat{\pi}}"
+    q = q.replace("@A@", A_s).replace("@H@", H if not maks else "h")
+    b = b.replace("@H@", H if not maks else "h")
+
+    k = r"K(Q,b) = \dfrac{D}{Q}@A@ + \dfrac{(Q-b)^2}{2Q}h + \dfrac{b^2}{2Q}\hat{\pi}".replace("@A@", A_s)
+    if pi_var_mi:
+        k += r" + \dfrac{D}{Q}\pi b"
+    if depo_ek_var:
+        k += r" + (Q-b)\,g" if maks else r" + \dfrac{(Q-b)^2}{2Q}g"
+    k += " + DC"
+    return baslik, [q, b, k]
+
 
 sekme_sonuc, sekme_formul = st.tabs(["Sonuçlar", "Model Formülleri"])
 
@@ -324,29 +466,21 @@ sekme_sonuc, sekme_formul = st.tabs(["Sonuçlar", "Model Formülleri"])
 # SEKME: MODEL FORMÜLLERİ
 # ------------------------------------------
 with sekme_formul:
-    if "Model 4" in sonradan_karsilama:
-        st.markdown("**Model 4 - Klasik EOQ (sonradan karşılama yok)**")
-        st.latex(r"Q^* = \sqrt{\dfrac{2AD}{h}}")
-        st.latex(r"K(Q) = \dfrac{D}{Q}A + \dfrac{Q}{2}h + DC")
-    elif not pi_var_mi:
-        st.markdown("**Model 3 - Perakendeci Modeli (π = 0)**")
-        st.latex(r"Q^* = \sqrt{\dfrac{2AD}{h}\cdot\dfrac{h+\hat{\pi}}{\hat{\pi}}}")
-        st.latex(r"b^* = Q^*\,\dfrac{h}{h+\hat{\pi}}")
-        st.latex(r"K(Q,b) = \dfrac{D}{Q}A + \dfrac{(Q-b)^2}{2Q}h + \dfrac{b^2}{2Q}\hat{\pi} + DC")
-    else:
-        st.markdown("**Model 3 - Perakendeci Modeli (π > 0)**")
-        st.latex(
-            r"Q^* = \sqrt{\left(\dfrac{2AD}{h} - \dfrac{(\pi D)^2}{h(h+\hat{\pi})}\right)\dfrac{h+\hat{\pi}}{\hat{\pi}}}"
-        )
-        st.latex(r"b^* = \dfrac{hQ^* - \pi D}{h+\hat{\pi}}")
-        st.latex(
-            r"K(Q,b) = \dfrac{D}{Q}A + \dfrac{(Q-b)^2}{2Q}h + \dfrac{b^2}{2Q}\hat{\pi} + \dfrac{D}{Q}\pi b + DC"
-        )
+    formul_baslik, formul_listesi = formuller_uret()
+    st.markdown(formul_baslik)
+    for formul in formul_listesi:
+        st.latex(formul)
 
     st.caption(
-        "Simgeler: D yıllık talep, A sipariş maliyeti, h stokta bulundurma maliyeti, C birim satın alma maliyeti, "
-        "π̂ zamana bağlı sonradan karşılama maliyeti, π zamandan bağımsız sonradan karşılama maliyeti."
+        "Simgeler: D yıllık talep, A sipariş maliyeti, A_ek ek sipariş maliyeti, h stokta bulundurma maliyeti, "
+        "g ek depolama maliyeti, C birim satın alma maliyeti, π̂ zamana bağlı sonradan karşılama maliyeti, "
+        "π zamandan bağımsız sonradan karşılama maliyeti, Ī ortalama stok, I_max maksimum stok."
     )
+    if depo_ek_var and ek_baz == BAZ_MAKS:
+        st.caption(
+            "Ek depolama maliyeti maksimum stok düzeyi üzerinden hesaplandığında, maliyet fonksiyonunun Q ve b'ye göre "
+            "türevleri sıfıra eşitlenerek yukarıdaki Q* ve b* ifadeleri elde edilir."
+        )
 
 # ------------------------------------------
 # SEKME: SONUÇLAR
@@ -365,18 +499,24 @@ with sekme_sonuc:
         )
         st.stop()
 
+    a_toplam = A + A_ek  # Toplam sipariş başına maliyet
+    ek_depo_adi = "Ek Depolama Maliyeti (Ī·g)" if ek_baz == BAZ_ORT else "Ek Depolama Maliyeti (I_max·g)"
+
     # --- MODEL 4 (KLASİK EOQ) ---
     if "Model 4" in sonradan_karsilama:
-        Q_opt = math.sqrt((2 * D * A) / h)
+        Q_opt = model4_coz(D, a_toplam, h, g_ek, ek_baz)
+        I_max = Q_opt
         I_ort = Q_opt / 2
         T = Q_opt / D
         T_gun = T * 365
         N = D / Q_opt
 
         siparis_mlyt = (D / Q_opt) * A
+        ek_siparis_mlyt = (D / Q_opt) * A_ek
         stok_mlyt = I_ort * h
+        ek_depo_mlyt = g_ek * (I_ort if ek_baz == BAZ_ORT else I_max)
         satinalma_mlyt = D * C
-        K_Q = siparis_mlyt + stok_mlyt + satinalma_mlyt
+        K_Q = siparis_mlyt + ek_siparis_mlyt + stok_mlyt + ek_depo_mlyt + satinalma_mlyt
 
         bolum("Temel Sonuçlar")
         c1, c2, c3, c4 = st.columns(4)
@@ -391,17 +531,21 @@ with sekme_sonuc:
             f"yaklaşık **{Q_opt:.0f} adet** sipariş vermelisiniz. Toplam yıllık maliyetiniz **{K_Q:,.2f} TL** olacaktır."
         )
 
-        kalemler = [
-            ("Sipariş Verme Maliyeti ((D/Q)·A)", siparis_mlyt),
-            ("Stokta Bulundurma Maliyeti ((Q/2)·h)", stok_mlyt),
-        ]
+        kalemler = [("Sipariş Verme Maliyeti ((D/Q)·A)", siparis_mlyt)]
+        if siparis_ek_var:
+            kalemler.append(("Ek Sipariş Maliyeti ((D/Q)·A_ek)", ek_siparis_mlyt))
+        kalemler.append(("Stokta Bulundurma Maliyeti ((Q/2)·h)", stok_mlyt))
+        if depo_ek_var:
+            kalemler.append((ek_depo_adi, ek_depo_mlyt))
         if C > 0:
             kalemler.append(("Satın Alma Maliyeti (D·C)", satinalma_mlyt))
 
         bolum("Maliyet Analizi")
         sol, sag = st.columns([1.1, 1])
         with sol:
-            st.dataframe(maliyet_tablosu(kalemler, "TOPLAM MALİYET K(Q)", K_Q), hide_index=True, use_container_width=True)
+            st.dataframe(
+                maliyet_tablosu(kalemler, "TOPLAM MALİYET K(Q)", K_Q), hide_index=True, **genis(st.dataframe)
+            )
         with sag:
             st.pyplot(maliyet_dagilimi_ciz(kalemler))
 
@@ -410,30 +554,29 @@ with sekme_sonuc:
 
     # --- MODEL 3 (SONRADAN KARŞILAMALI PERAKENDECİ MODELİ) ---
     else:
-        if not pi_var_mi:
-            Q_opt = math.sqrt(((2 * A * D) / h) * ((h + pi_hat) / pi_hat))
-            b_opt = Q_opt * (h / (h + pi_hat))
-            model_baslik = "Model 3 (π = 0)"
-        else:
-            kok_ici = ((2 * A * D) / h) - (((pi_sabit * D) ** 2) / (h * (h + pi_hat)))
-            if kok_ici <= 0:
-                st.error(
-                    "**Uyarı:** Girilen zamandan bağımsız sonradan karşılama maliyeti (π) çok yüksek olduğu için "
-                    "sonradan karşılama yapmak ekonomik değildir (kök içi negatif/sıfır). "
-                    "Bu problemde **Model 4 (Yoksatmasız EOQ)** kullanmalısınız."
-                )
-                st.stop()
+        Q_opt, b_opt, hata = model3_coz(D, a_toplam, h, g_ek, ek_baz, pi_hat, pi_sabit)
 
-            Q_opt = math.sqrt(kok_ici) * math.sqrt((h + pi_hat) / pi_hat)
-            b_opt = (h * Q_opt - pi_sabit * D) / (h + pi_hat)
-
-            if b_opt <= 0:
-                st.warning(
-                    "**Uyarı:** Hesaplanan b* ≤ 0 çıktı. Bu π değeriyle müşteriyi bekletmek (sonradan karşılama) "
-                    "ekonomik değildir; sistem otomatik olarak yoksatmasız çözüme (Model 4) yakınsar."
-                )
-                st.stop()
-            model_baslik = "Model 3 (π > 0)"
+        if hata == "ekonomik_degil":
+            st.error(
+                "**Uyarı:** Girilen zamandan bağımsız sonradan karşılama maliyeti (π) ve/veya ek maliyetler nedeniyle "
+                "sonradan karşılama yapmak ekonomik değildir (kök içi negatif/sıfır). "
+                "Bu problemde **Model 4 (Yoksatmasız EOQ)** kullanmalısınız."
+            )
+            st.stop()
+        if hata == "stok_yok":
+            st.error(
+                "**Uyarı:** Ek depolama maliyeti (g), zamana bağlı sonradan karşılama maliyetine (π̂) göre çok yüksek "
+                "olduğundan optimum çözümde elde stok bulundurulmamaktadır (b* ≥ Q*). "
+                "Lütfen g ve π̂ değerlerini kontrol ediniz."
+            )
+            st.stop()
+        if b_opt <= 0:
+            st.warning(
+                "**Uyarı:** Hesaplanan b* ≤ 0 çıktı. Bu π değeriyle müşteriyi bekletmek (sonradan karşılama) "
+                "ekonomik değildir; sistem otomatik olarak yoksatmasız çözüme (Model 4) yakınsar."
+            )
+            st.stop()
+        model_baslik = "Model 3 (π > 0)" if pi_var_mi else "Model 3 (π = 0)"
 
         I_max = Q_opt - b_opt
         I_ort = ((Q_opt - b_opt) ** 2) / (2 * Q_opt)
@@ -445,11 +588,21 @@ with sekme_sonuc:
         N = D / Q_opt
 
         siparis_mlyt = (D / Q_opt) * A
+        ek_siparis_mlyt = (D / Q_opt) * A_ek
         stok_mlyt = I_ort * h
+        ek_depo_mlyt = g_ek * (I_ort if ek_baz == BAZ_ORT else I_max)
         zamana_bagli_mlyt = B_ort * pi_hat
         zamandan_bagimsiz_mlyt = (D / Q_opt) * pi_sabit * b_opt
         satinalma_mlyt = D * C
-        K_Qb = siparis_mlyt + stok_mlyt + zamana_bagli_mlyt + zamandan_bagimsiz_mlyt + satinalma_mlyt
+        K_Qb = (
+            siparis_mlyt
+            + ek_siparis_mlyt
+            + stok_mlyt
+            + ek_depo_mlyt
+            + zamana_bagli_mlyt
+            + zamandan_bagimsiz_mlyt
+            + satinalma_mlyt
+        )
 
         bolum("Temel Sonuçlar")
         c1, c2, c3, c4 = st.columns(4)
@@ -472,11 +625,13 @@ with sekme_sonuc:
             f"**{b_opt:.0f} adet** talep sonradan karşılanmak üzere bekletilecektir. Toplam yıllık maliyet: **{K_Qb:,.2f} TL**."
         )
 
-        kalemler = [
-            ("Sipariş Verme Maliyeti ((D/Q)·A)", siparis_mlyt),
-            ("Stokta Bulundurma Maliyeti (Ī·h)", stok_mlyt),
-            ("Zamana Bağlı Sonradan Karş. Maliyeti (B̄·π̂)", zamana_bagli_mlyt),
-        ]
+        kalemler = [("Sipariş Verme Maliyeti ((D/Q)·A)", siparis_mlyt)]
+        if siparis_ek_var:
+            kalemler.append(("Ek Sipariş Maliyeti ((D/Q)·A_ek)", ek_siparis_mlyt))
+        kalemler.append(("Stokta Bulundurma Maliyeti (Ī·h)", stok_mlyt))
+        if depo_ek_var:
+            kalemler.append((ek_depo_adi, ek_depo_mlyt))
+        kalemler.append(("Zamana Bağlı Sonradan Karş. Maliyeti (B̄·π̂)", zamana_bagli_mlyt))
         if pi_var_mi:
             kalemler.append(("Zamandan Bağımsız Sonradan Karş. Maliyeti ((D/Q)·π·b)", zamandan_bagimsiz_mlyt))
         if C > 0:
@@ -485,7 +640,9 @@ with sekme_sonuc:
         bolum("Maliyet Analizi")
         sol, sag = st.columns([1.1, 1])
         with sol:
-            st.dataframe(maliyet_tablosu(kalemler, "TOPLAM MALİYET K(Q,b)", K_Qb), hide_index=True, use_container_width=True)
+            st.dataframe(
+                maliyet_tablosu(kalemler, "TOPLAM MALİYET K(Q,b)", K_Qb), hide_index=True, **genis(st.dataframe)
+            )
         with sag:
             st.pyplot(maliyet_dagilimi_ciz(kalemler))
 
