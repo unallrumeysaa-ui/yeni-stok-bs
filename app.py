@@ -1,5 +1,9 @@
+import csv
 import inspect
+import io
 import math
+import textwrap
+from datetime import datetime
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -399,6 +403,190 @@ def bolum(baslik):
 
 
 # ==========================================
+# RAPORLAMA FONKSİYONLARI
+# ==========================================
+def tr_say(x, nd=2, binlik=True):
+    """Sayıyı Türkçe biçimde yazar (1.234,56). binlik=False ise Excel için binlik ayracı kullanılmaz."""
+    s = f"{x:,.{nd}f}" if binlik else f"{x:.{nd}f}"
+    return s.replace(",", "§").replace(".", ",").replace("§", ".")
+
+
+def rapor_zamani():
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("Europe/Istanbul"))
+    except Exception:
+        return datetime.now()
+
+
+def _deger(v, binlik=True):
+    return v if isinstance(v, str) else tr_say(v, binlik=binlik)
+
+
+def rapor_girdileri():
+    """Rapora yazılacak model bilgileri ve girdi parametreleri."""
+    metinler = [("Seçilen Model", model_etiketi)]
+    ek = []
+    if siparis_ek_var:
+        ek.append("Sipariş maliyetine ek maliyet (nakliye vb.)")
+    if depo_ek_var:
+        ek.append(
+            "Depolama maliyetine ek maliyet ("
+            + ("ortalama stok" if ek_baz == BAZ_ORT else "maksimum stok")
+            + " esaslı)"
+        )
+    metinler.append(("Ek Operasyonel Maliyetler", "; ".join(ek) if ek else "Uygulanmamıştır"))
+
+    sayilar = [
+        ("Yıllık Talep (D)", D, "adet/yıl"),
+        ("Sipariş Verme Maliyeti (A)", A, "TL/sipariş"),
+    ]
+    if "doğrudan" in h_durumu:
+        sayilar.append(("Stokta Bulundurma Maliyeti (h)", h, "TL/adet-yıl"))
+        if C > 0:
+            sayilar.append(("Birim Satın Alma Maliyeti (C)", C, "TL/adet"))
+    else:
+        sayilar.append(("Birim Satın Alma Maliyeti (C)", C, "TL/adet"))
+        sayilar.append(("Stokta Bulundurma Maliyet Oranı (i)", i_yuzde, "%"))
+        sayilar.append(("Stokta Bulundurma Maliyeti (h = i × C)", h, "TL/adet-yıl"))
+    if "Model 3" in sonradan_karsilama:
+        sayilar.append(("Zamana Bağlı Sonradan Karşılama Maliyeti (π̂)", pi_hat, "TL/adet-yıl"))
+        if pi_var_mi:
+            sayilar.append(("Zamandan Bağımsız Sonradan Karşılama Maliyeti (π)", pi_sabit, "TL/adet"))
+    if siparis_ek_var:
+        sayilar.append(("Ek Sipariş Maliyeti (A_ek)", A_ek, "TL/sipariş"))
+    if depo_ek_var:
+        sayilar.append(("Ek Depolama Maliyeti (g)", g_ek, "TL/adet-yıl"))
+    return metinler, sayilar
+
+
+def rapor_notlari():
+    notlar = [
+        "Hesaplamalar yıl 365 gün esas alınarak yapılmıştır. Talebin sabit ve önceden bilindiği, "
+        "siparişlerin verildiği anda teslim alındığı varsayılmıştır.",
+        "Sunulan değerler, girilen parametreler altında toplam yıllık maliyeti en küçükleyen (optimum) "
+        "stok politikasını göstermektedir.",
+    ]
+    if "Model 3" in sonradan_karsilama:
+        notlar.append(
+            "Sonradan karşılama (yoksatma) politikası uygulanmıştır; stok tükendiğinde gelen talep "
+            "bekletilmekte ve bir sonraki teslimatta karşılanmaktadır."
+        )
+    if siparis_ek_var:
+        notlar.append(
+            "Ek sipariş maliyeti (A_ek), her sipariş için oluştuğundan yıllık maliyete (D/Q)·A_ek olarak yansıtılmıştır."
+        )
+    if depo_ek_var:
+        if ek_baz == BAZ_ORT:
+            notlar.append("Ek depolama maliyeti (g), ortalama stok düzeyi (Ī) üzerinden hesaplanmıştır.")
+        else:
+            notlar.append(
+                "Ek depolama maliyeti (g), maksimum stok düzeyi (I_max) üzerinden hesaplanmıştır; "
+                "optimum sipariş miktarı bu esasa göre yeniden türetilmiştir."
+            )
+    notlar.append(
+        "Bu rapor karar destek amacıyla otomatik olarak üretilmiştir. Uygulamaya geçmeden önce "
+        "girdi parametrelerinin güncelliği ve doğruluğu teyit edilmelidir."
+    )
+    return notlar
+
+
+def _paylar(kalemler, toplam):
+    return [(ad, tutar, (tutar / toplam * 100) if toplam > 0 else 0.0) for ad, tutar in kalemler]
+
+
+def rapor_metni(sonuclar, ozet, kalemler, toplam_adi, toplam, tarih, rapor_no):
+    G = 80
+    kalin, ince = "=" * G, "-" * G
+    metinler, sayilar = rapor_girdileri()
+
+    def satir(ad, deger, birim=""):
+        return f" {ad:<52}{(_deger(deger) + ' ' + birim).strip():>26}"
+
+    L = [
+        kalin,
+        "PERAKENDECİ STOK MODELLERİ BİLGİ SİSTEMİ".center(G),
+        "STOK POLİTİKASI VE MALİYET ANALİZİ RAPORU".center(G),
+        kalin,
+        f" Rapor No            : {rapor_no}",
+        f" Düzenlenme Tarihi   : {tarih:%d.%m.%Y %H:%M}",
+        " Düzenleyen          : Perakendeci Stok Modelleri Bilgi Sistemi",
+        "",
+        "1. MODEL VE GİRDİ PARAMETRELERİ",
+        ince,
+    ]
+    for ad, v in metinler:
+        L.append(
+            textwrap.fill(
+                f"{ad:<26}: {v}", width=G - 1, initial_indent=" ", subsequent_indent=" " + " " * 28
+            )
+        )
+    L.append("")
+    L += [satir(ad, v, b) for ad, v, b in sayilar]
+    L += ["", "2. OPTİMUM SONUÇLAR", ince]
+    L += [satir(ad, v, b) for ad, v, b in sonuclar]
+    L += ["", "3. KARAR ÖZETİ", ince]
+    L.append(textwrap.fill(ozet, width=G - 2, initial_indent=" ", subsequent_indent=" "))
+    L += ["", "4. YILLIK MALİYET ANALİZİ", ince]
+    L.append(f" {'Maliyet Kalemi':<56}{'Tutar (TL/Yıl)':>14}{'Pay':>8}")
+    L.append(" " + "-" * (G - 2))
+    for ad, tutar, pay in _paylar(kalemler, toplam):
+        L.append(f" {ad:<56}{tr_say(tutar):>14}{('%' + tr_say(pay, 1)):>8}")
+    L.append(" " + "-" * (G - 2))
+    L.append(f" {toplam_adi:<56}{tr_say(toplam):>14}{'%100,0':>8}")
+    L += ["", "5. DEĞERLENDİRME VE NOTLAR", ince]
+    for i, n in enumerate(rapor_notlari(), 1):
+        L.append(textwrap.fill(n, width=G - 2, initial_indent=f" {i}. ", subsequent_indent="    "))
+    L += [
+        "",
+        kalin,
+        "Bu rapor Perakendeci Stok Modelleri Bilgi Sistemi tarafından otomatik olarak".center(G),
+        "üretilmiştir.".center(G),
+        kalin,
+    ]
+    return "\n".join(L).replace("\n", "\r\n") + "\r\n"
+
+
+def rapor_csv(sonuclar, ozet, kalemler, toplam_adi, toplam, tarih, rapor_no):
+    """Excel (Türkçe) uyumlu: ';' ayraçlı, ondalık virgüllü. UTF-8 BOM ile kodlanmalıdır."""
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+    metinler, sayilar = rapor_girdileri()
+
+    w.writerow(["PERAKENDECİ STOK MODELLERİ BİLGİ SİSTEMİ"])
+    w.writerow(["Stok Politikası ve Maliyet Analizi Raporu"])
+    w.writerow(["Rapor No", rapor_no])
+    w.writerow(["Düzenlenme Tarihi", f"{tarih:%d.%m.%Y %H:%M}"])
+    w.writerow([])
+    w.writerow(["1. MODEL VE GİRDİ PARAMETRELERİ"])
+    w.writerow(["Parametre", "Değer", "Birim"])
+    for ad, v in metinler:
+        w.writerow([ad, v, ""])
+    for ad, v, b in sayilar:
+        w.writerow([ad, _deger(v, binlik=False), b])
+    w.writerow([])
+    w.writerow(["2. OPTİMUM SONUÇLAR"])
+    w.writerow(["Gösterge", "Değer", "Birim"])
+    for ad, v, b in sonuclar:
+        w.writerow([ad, _deger(v, binlik=False), b])
+    w.writerow([])
+    w.writerow(["3. KARAR ÖZETİ"])
+    w.writerow([ozet])
+    w.writerow([])
+    w.writerow(["4. YILLIK MALİYET ANALİZİ"])
+    w.writerow(["Maliyet Kalemi", "Tutar (TL/Yıl)", "Pay (%)"])
+    for ad, tutar, pay in _paylar(kalemler, toplam):
+        w.writerow([ad, tr_say(tutar, binlik=False), tr_say(pay, 1, binlik=False)])
+    w.writerow([toplam_adi, tr_say(toplam, binlik=False), "100,0"])
+    w.writerow([])
+    w.writerow(["5. DEĞERLENDİRME VE NOTLAR"])
+    for i, n in enumerate(rapor_notlari(), 1):
+        w.writerow([f"{i}. {n}"])
+    return buf.getvalue()
+
+
+# ==========================================
 # ANA ALAN: SEKMELER
 # ==========================================
 model_etiketi = (
@@ -526,9 +714,24 @@ with sekme_sonuc:
         c4.metric("Toplam Maliyet K(Q)", f"{K_Q:,.2f} TL")
 
         st.write("")
-        st.success(
+        ozet_md = (
             f"**Karar Özeti:** En ekonomik çözüm için her **{T_gun:.1f} günde bir** (yılda {N:.1f} kez) "
             f"yaklaşık **{Q_opt:.0f} adet** sipariş vermelisiniz. Toplam yıllık maliyetiniz **{K_Q:,.2f} TL** olacaktır."
+        )
+        st.success(ozet_md)
+
+        sonuc_listesi = [
+            ("Optimum Sipariş Miktarı (Q*)", Q_opt, "adet"),
+            ("Ortalama Stok Düzeyi (Ī)", I_ort, "adet"),
+            ("Çevrim Süresi (T)", T_gun, "gün"),
+            ("Yıllık Sipariş Sayısı (N)", N, "adet/yıl"),
+            ("Toplam Yıllık Maliyet K(Q)", K_Q, "TL/yıl"),
+        ]
+        toplam_adi, toplam_tutar = "TOPLAM MALİYET K(Q)", K_Q
+        ozet_duz = (
+            f"En ekonomik çözüm için her {tr_say(T_gun, 1)} günde bir (yılda {tr_say(N, 1)} kez) "
+            f"yaklaşık {tr_say(Q_opt, 0)} adet sipariş verilmelidir. "
+            f"Toplam yıllık maliyet {tr_say(K_Q)} TL olarak gerçekleşecektir."
         )
 
         kalemler = [("Sipariş Verme Maliyeti ((D/Q)·A)", siparis_mlyt)]
@@ -619,10 +822,31 @@ with sekme_sonuc:
         c8.metric("Yoksatma Süresi (t2)", f"{t2 * 365:.1f} gün")
 
         st.write("")
-        st.success(
+        ozet_md = (
             f"**Karar Özeti:** Her **{T * 365:.1f} günde bir** (yılda {N:.1f} kez) **{Q_opt:.0f} adet** sipariş vermelisiniz. "
             f"Stoklarınız **{t1 * 365:.1f} gün** boyunca talebi karşılayacak, kalan **{t2 * 365:.1f} günde** ise en fazla "
             f"**{b_opt:.0f} adet** talep sonradan karşılanmak üzere bekletilecektir. Toplam yıllık maliyet: **{K_Qb:,.2f} TL**."
+        )
+        st.success(ozet_md)
+
+        sonuc_listesi = [
+            ("Optimum Sipariş Miktarı (Q*)", Q_opt, "adet"),
+            ("Maksimum Yoksatma Miktarı (b*)", b_opt, "adet"),
+            ("Maksimum Stok Düzeyi (Q* - b*)", I_max, "adet"),
+            ("Ortalama Stok Düzeyi (Ī)", I_ort, "adet"),
+            ("Ortalama Yoksatma Düzeyi (B̄)", B_ort, "adet"),
+            ("Stoklu Süre (t1)", t1 * 365, "gün"),
+            ("Yoksatma Süresi (t2)", t2 * 365, "gün"),
+            ("Çevrim Süresi (T)", T * 365, "gün"),
+            ("Yıllık Sipariş Sayısı (N)", N, "adet/yıl"),
+            ("Toplam Yıllık Maliyet K(Q,b)", K_Qb, "TL/yıl"),
+        ]
+        toplam_adi, toplam_tutar = "TOPLAM MALİYET K(Q,b)", K_Qb
+        ozet_duz = (
+            f"Her {tr_say(T * 365, 1)} günde bir (yılda {tr_say(N, 1)} kez) {tr_say(Q_opt, 0)} adet sipariş "
+            f"verilmelidir. Stoklar {tr_say(t1 * 365, 1)} gün boyunca talebi karşılayacak; kalan "
+            f"{tr_say(t2 * 365, 1)} günde ise en fazla {tr_say(b_opt, 0)} adet talep sonradan karşılanmak "
+            f"üzere bekletilecektir. Toplam yıllık maliyet {tr_say(K_Qb)} TL olarak gerçekleşecektir."
         )
 
         kalemler = [("Sipariş Verme Maliyeti ((D/Q)·A)", siparis_mlyt)]
@@ -649,6 +873,32 @@ with sekme_sonuc:
         bolum("Stok Seviyesi Grafiği")
         st.pyplot(stok_grafigi_ciz(Q_opt, b_opt, T, t1, t2, model_baslik))
 
+    # --- RAPORLAMA (her iki model için ortak) ---
+    bolum("Raporlama")
+    st.caption(
+        "Hesaplama sonuçlarını resmi rapor olarak indirebilirsiniz. CSV dosyası Excel'de doğrudan açılır "
+        "(noktalı virgül ayraçlı, Türkçe sayı biçimli)."
+    )
+    simdi = rapor_zamani()
+    rapor_no = f"STK-{simdi:%Y%m%d-%H%M%S}"
+    txt_icerik = rapor_metni(sonuc_listesi, ozet_duz, kalemler, toplam_adi, toplam_tutar, simdi, rapor_no)
+    csv_icerik = rapor_csv(sonuc_listesi, ozet_duz, kalemler, toplam_adi, toplam_tutar, simdi, rapor_no)
+    dosya_tabani = f"stok_raporu_{simdi:%Y%m%d_%H%M}"
 
-        bolum("Stok Seviyesi Grafiği")
-        st.pyplot(stok_grafigi_ciz(Q_opt, b_opt, T, t1, t2, model_baslik))
+    r1, r2 = st.columns(2)
+    with r1:
+        st.download_button(
+            "Resmi Raporu İndir (.txt)",
+            data=txt_icerik.encode("utf-8"),
+            file_name=f"{dosya_tabani}.txt",
+            mime="text/plain",
+            **genis(st.download_button),
+        )
+    with r2:
+        st.download_button(
+            "Maliyet Tablosunu İndir (.csv · Excel)",
+            data=csv_icerik.encode("utf-8-sig"),
+            file_name=f"{dosya_tabani}.csv",
+            mime="text/csv",
+            **genis(st.download_button),
+        )
